@@ -35,5 +35,17 @@ export const updateCategory = (id, formData) => {
 };
 
 export const deleteCategory = (id) => {
-    return apiAdmin.delete(`/cat/v1/update/delete/${id}`)
+    return apiAdmin.delete(`/cat/v1/category/delete/${id}`)
 }
+
+export const createProduct = (formData) => {
+    return apiAdmin.post(
+        "/prod/v1/create/product/listing",
+        formData,
+        {
+            headers: {
+                "Content-Type": "multipart/form-data",
+            },
+        }
+    );
+};
