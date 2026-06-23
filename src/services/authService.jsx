@@ -49,3 +49,7 @@ export const createProduct = (formData) => {
         }
     );
 };
+
+export const fetchProduct = () => {
+    return apiAdmin.get("/prod/get/all/products");
+}

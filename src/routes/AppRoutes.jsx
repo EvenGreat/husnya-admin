@@ -6,6 +6,7 @@ import ProtectedRoute from "./ProtectedRoute";
 import MainLayout from "../component/layout/MainLayout";
 import CreateCategory from "../pages/category/CreateCategory";
 import CreateProduct from "../pages/CreateProduct";
+import ProductList from "../pages/ProductList";
 
 export default function AppRoutes() {
     return (
@@ -16,6 +17,7 @@ export default function AppRoutes() {
                 <Route path="/" element={<Home />} />
                 <Route path="/category" element={<CreateCategory />} />
                 <Route path="/product-list" element={<CreateProduct />} />
+                <Route path="/products" element={<ProductList />} />
             </Route>
         </Routes>
     );

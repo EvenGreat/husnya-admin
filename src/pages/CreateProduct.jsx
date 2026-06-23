@@ -7,30 +7,71 @@ const EMPTY = {
     hasVariants: false, tags: "", status: "draft", featured: false,
     seoTitle: "", seoDescription: "",
 };
+export default function ProductForm({ productId }) {
+    const isEdit = Boolean(productId);
 
-export default function CreateProduct() {
     const [form, setForm] = useState(EMPTY);
     const [mainImage, setMainImage] = useState(null);
     const [mainPreview, setMainPreview] = useState(null);
+
+    const [existingMainImage, setExistingMainImage] = useState(null);
+    const [existingGallery, setExistingGallery] = useState([]);
+    const [removedExistingImages, setRemovedExistingImages] = useState([]);
+
     const [gallery, setGallery] = useState([]);
+
     const [variants, setVariants] = useState([{ size: "", color: "", sku: "", stock: "" }]);
     const [categories, setCategories] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [fetching, setFetching] = useState(isEdit);
+
     const mainRef = useRef(null);
     const galleryRef = useRef(null);
 
     useEffect(() => {
         fetchCategory()
-            .then(res => {
-                setCategories(
-                    Array.isArray(res.data?.categories)
-                        ? res.data.categories
-                        : []
-                );
-            })
+            .then(res => setCategories(Array.isArray(res.data?.categories) ? res.data.categories : []))
             .catch(console.error);
     }, []);
+    
+    // useEffect(() => {
+    //     if (!isEdit) return;
 
+    //     setFetching(true);
+    //     fetchProductById(productId)
+    //         .then(res => {
+    //             const p = res.data?.product ?? res.data;
+
+    //             setForm({
+    //                 name: p.name ?? "",
+    //                 slug: p.slug ?? "",
+    //                 category: p.category?._id ?? p.category ?? "",
+    //                 description: p.description ?? "",
+    //                 shortDescription: p.shortDescription ?? "",
+    //                 brand: p.brand ?? "Frrit",
+    //                 regularPrice: p.regularPrice ?? "",
+    //                 salePrice: p.salePrice ?? "",
+    //                 sku: p.sku ?? "",
+    //                 stock: p.stock ?? "",
+    //                 hasVariants: p.hasVariants ?? false,
+    //                 tags: Array.isArray(p.tags) ? p.tags.join(", ") : (p.tags ?? ""),
+    //                 status: p.status ?? "draft",
+    //                 featured: p.featured ?? false,
+    //                 seoTitle: p.seoTitle ?? "",
+    //                 seoDescription: p.seoDescription ?? "",
+    //             });
+
+    //             const imgs = p.images ?? [];
+    //             if (imgs.length > 0) setExistingMainImage(imgs[0]);
+    //             if (imgs.length > 1) setExistingGallery(imgs.slice(1));
+
+    //             if (p.variants?.length) setVariants(p.variants);
+    //         })
+    //         .catch(console.error)
+    //         .finally(() => setFetching(false));
+    // }, [productId, isEdit]);
+
+    // ── Form helpers ──────────────────────────────────────────────────────────
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
         setForm(p => ({ ...p, [name]: type === "checkbox" ? checked : value }));
@@ -38,26 +79,39 @@ export default function CreateProduct() {
 
     const handleNameChange = (e) => {
         const name = e.target.value;
-        setForm(p => ({ ...p, name, slug: name.toLowerCase().replace(/\s+/g, "-").replace(/[^\w-]+/g, "") }));
+        setForm(p => ({
+            ...p,
+            name,
+            slug: name.toLowerCase().replace(/\s+/g, "-").replace(/[^\w-]+/g, ""),
+        }));
     };
 
+    // ── Main image ────────────────────────────────────────────────────────────
     const handleMainImage = (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        if (mainPreview) URL.revokeObjectURL(mainPreview);
         setMainImage(file);
         setMainPreview(URL.createObjectURL(file));
+        // Once a new file is chosen the existing server image is replaced
+        setExistingMainImage(null);
     };
 
     const removeMain = () => {
         if (mainPreview) URL.revokeObjectURL(mainPreview);
-
         setMainImage(null);
         setMainPreview(null);
-
+        if (existingMainImage) {
+            setRemovedExistingImages(p => [...p, existingMainImage]);
+            setExistingMainImage(null);
+        }
         if (mainRef.current) mainRef.current.value = "";
-        if (galleryRef.current) galleryRef.current.value = "";
     };
 
+    const hasMainImage = mainPreview || existingMainImage;
+    const mainDisplaySrc = mainPreview ?? existingMainImage;
+
+    // ── Gallery ───────────────────────────────────────────────────────────────
     const handleGalleryAdd = (e) => {
         const files = Array.from(e.target.files);
         const newItems = files.map(file => ({ file, preview: URL.createObjectURL(file) }));
@@ -67,164 +121,149 @@ export default function CreateProduct() {
 
     const removeGalleryItem = (i) => {
         URL.revokeObjectURL(gallery[i].preview);
-
-        setGallery(prev =>
-            prev.filter((_, idx) => idx !== i)
-        );
+        setGallery(prev => prev.filter((_, idx) => idx !== i));
     };
 
+    const removeExistingGalleryItem = (url) => {
+        setExistingGallery(p => p.filter(u => u !== url));
+        setRemovedExistingImages(p => [...p, url]);
+    };
+
+    const totalGalleryCount = existingGallery.length + gallery.length;
+
+    // ── Variants ──────────────────────────────────────────────────────────────
     const handleVariantChange = (i, field, val) =>
         setVariants(prev => prev.map((v, idx) => idx === i ? { ...v, [field]: val } : v));
-
     const addVariant = () => setVariants(p => [...p, { size: "", color: "", sku: "", stock: "" }]);
     const removeVariant = (i) => setVariants(p => p.filter((_, idx) => idx !== i));
 
+    // ── Submit ────────────────────────────────────────────────────────────────
     const handleSubmit = async (e) => {
         e.preventDefault();
 
+        if (!form.name.trim()) return alert("Product name is required");
+        if (!form.category) return alert("Category is required");
+        if (!form.description.trim()) return alert("Description is required");
+        if (!form.regularPrice) return alert("Regular price is required");
+
+        // In create mode a main image is mandatory; in edit it may already exist
+        if (!isEdit && !mainImage) return alert("Main product image is required");
+
+        if (form.hasVariants) {
+            if (variants.length === 0) return alert("At least one variant is required");
+            const skuSet = new Set();
+            for (const v of variants) {
+                if (!v.sku?.trim()) return alert("All variants must have a SKU");
+                if (skuSet.has(v.sku.trim())) return alert("Variant SKUs must be unique");
+                skuSet.add(v.sku.trim());
+            }
+        }
+
+        setLoading(true);
+
         try {
-            // Basic Validation
-            if (!form.name.trim()) {
-                return alert("Product name is required");
-            }
-
-            if (!form.category) {
-                return alert("Category is required");
-            }
-
-            if (!form.description.trim()) {
-                return alert("Description is required");
-            }
-
-            if (!form.regularPrice) {
-                return alert("Regular price is required");
-            }
-
-            if (!mainImage) {
-                return alert("Main product image is required");
-            }
-
-            // Variant Validation
-            if (form.hasVariants) {
-                if (variants.length === 0) {
-                    return alert("At least one variant is required");
-                }
-
-                const skuSet = new Set();
-
-                for (const variant of variants) {
-                    if (!variant.sku?.trim()) {
-                        return alert("All variants must have SKU");
-                    }
-
-                    if (skuSet.has(variant.sku.trim())) {
-                        return alert("Variant SKUs must be unique");
-                    }
-
-                    skuSet.add(variant.sku.trim());
-                }
-            }
-
-            setLoading(true);
-
             const payload = new FormData();
+            Object.entries(form).forEach(([key, value]) => payload.append(key, value));
 
-            // Form fields
-            Object.entries(form).forEach(([key, value]) => {
-                payload.append(key, value);
-            });
+            if (mainImage) payload.append("images", mainImage);
+            gallery.forEach(item => payload.append("images", item.file));
 
-            // Main Image
-            payload.append("images", mainImage);
+            if (form.hasVariants) payload.append("variants", JSON.stringify(variants));
 
-            // Gallery Images
-            gallery.forEach((item) => {
-                payload.append("images", item.file);
-            });
-
-            // Variants
-            if (form.hasVariants) {
-                payload.append("variants", JSON.stringify(variants));
+            // Tell the backend which existing images to delete (edit mode)
+            if (isEdit && removedExistingImages.length) {
+                payload.append("removedImages", JSON.stringify(removedExistingImages));
             }
 
-            const response = await createProduct(payload);
+            // const response = isEdit
+            //     ? await updateProduct(productId, payload)
+            //     : await createProduct(payload);
+            const response = '';
+            
 
-            alert(response?.data?.message || "Product created successfully");
+            alert(response?.data?.message || (isEdit ? "Product updated successfully" : "Product created successfully"));
 
-            // Cleanup previews
-            if (mainPreview) {
-                URL.revokeObjectURL(mainPreview);
+            if (!isEdit) {
+                // Full reset only on create; on edit we stay on the page
+                if (mainPreview) URL.revokeObjectURL(mainPreview);
+                gallery.forEach(g => URL.revokeObjectURL(g.preview));
+
+                setForm(EMPTY);
+                setMainImage(null);
+                setMainPreview(null);
+                setGallery([]);
+                setVariants([{ size: "", color: "", sku: "", stock: "" }]);
+                if (mainRef.current) mainRef.current.value = "";
+                if (galleryRef.current) galleryRef.current.value = "";
+            } else {
+                // Clear only the newly-picked files; existing images stay
+                gallery.forEach(g => URL.revokeObjectURL(g.preview));
+                setGallery([]);
+                setMainImage(null);
+                setRemovedExistingImages([]);
+                if (mainRef.current) mainRef.current.value = "";
+                if (galleryRef.current) galleryRef.current.value = "";
             }
-
-            gallery.forEach((g) => {
-                URL.revokeObjectURL(g.preview);
-            });
-
-            // Reset Form
-            setForm(EMPTY);
-            setMainImage(null);
-            setMainPreview(null);
-            setGallery([]);
-            setVariants([
-                {
-                    size: "",
-                    color: "",
-                    sku: "",
-                    stock: "",
-                },
-            ]);
-
-            if (mainRef.current) {
-                mainRef.current.value = "";
-            }
-
-            if (galleryRef.current) {
-                galleryRef.current.value = "";
-            }
-
         } catch (err) {
             console.error(err);
-
             const errors = err?.response?.data?.errors;
-
-            if (errors) {
-                alert(Object.values(errors).join("\n"));
-            } else {
-                alert(
-                    err?.response?.data?.message ||
-                    "Failed to create product"
-                );
-            }
+            if (errors) alert(Object.values(errors).join("\n"));
+            else alert(err?.response?.data?.message || (isEdit ? "Failed to update product" : "Failed to create product"));
         } finally {
             setLoading(false);
         }
     };
 
+    // ── Loading skeleton while fetching in edit mode ──────────────────────────
+    if (fetching) {
+        return (
+            <div className="max-w-5xl mx-auto space-y-4 animate-pulse">
+                <div className="h-8 bg-gray-200 rounded-lg w-48" />
+                <div className="h-64 bg-gray-100 rounded-xl" />
+                <div className="h-40 bg-gray-100 rounded-xl" />
+            </div>
+        );
+    }
+
+    // ── Render ────────────────────────────────────────────────────────────────
     return (
         <form onSubmit={handleSubmit} className="max-w-5xl mx-auto">
             <div className="flex items-center justify-between mb-4">
                 <div>
-                    <h1 className="text-base font-semibold text-gray-800">Add New Product</h1>
-                    <p className="text-xs text-gray-400">Fill in the details to list a product</p>
+                    <h1 className="text-base font-semibold text-gray-800">
+                        {isEdit ? "Edit Product" : "Add New Product"}
+                    </h1>
+                    <p className="text-xs text-gray-400">
+                        {isEdit ? "Update the details below" : "Fill in the details to list a product"}
+                    </p>
                 </div>
                 <button type="submit" disabled={loading}
                     className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium px-4 py-2 rounded-lg disabled:opacity-50 flex items-center gap-1.5">
-                    {loading && <svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>}
-                    {loading ? "Publishing…" : "Publish Product"}
+                    {loading && (
+                        <svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                        </svg>
+                    )}
+                    {loading
+                        ? (isEdit ? "Saving…" : "Publishing…")
+                        : (isEdit ? "Save Changes" : "Publish Product")}
                 </button>
             </div>
 
             <div className="flex gap-5 items-start">
 
-                {/* LEFT COLUMN */}
+                {/* ── LEFT COLUMN ────────────────────────────────────────── */}
                 <div className="flex-1 min-w-0 space-y-4">
 
                     <Section title="Basic Info">
                         <Field label="Product Name" required>
-                            <input type="text" name="name" value={form.name} onChange={handleNameChange} placeholder="e.g. Classic Cotton Tee" required className={input} />
+                            <input type="text" name="name" value={form.name} onChange={handleNameChange}
+                                placeholder="e.g. Classic Cotton Tee" required className={input} />
                         </Field>
                         <Field label="Slug" required>
-                            <input type="text" name="slug" value={form.slug} onChange={handleChange} required className={`${input} font-mono bg-gray-50`} />
+                            <input type="text" name="slug" value={form.slug} onChange={handleChange}
+                                required className={`${input} font-mono bg-gray-50`} />
                         </Field>
                         <div className="grid grid-cols-2 gap-3">
                             <Field label="Category" required>
@@ -232,9 +271,7 @@ export default function CreateProduct() {
                                     <option value="">Select category</option>
                                     {categories.map(c => (
                                         <option key={c._id} value={c._id}>
-                                            {c.parent?.name
-                                                ? `${c.parent.name} → ${c.name}`
-                                                : c.name}
+                                            {c.parent?.name ? `${c.parent.name} → ${c.name}` : c.name}
                                         </option>
                                     ))}
                                 </select>
@@ -244,29 +281,35 @@ export default function CreateProduct() {
                             </Field>
                         </div>
                         <Field label="Short Description">
-                            <textarea name="shortDescription" value={form.shortDescription} onChange={handleChange} rows="2" placeholder="One-line product summary…" className={`${input} resize-none`} />
+                            <textarea name="shortDescription" value={form.shortDescription} onChange={handleChange}
+                                rows="2" placeholder="One-line product summary…" className={`${input} resize-none`} />
                         </Field>
                         <Field label="Description" required>
-                            <textarea name="description" value={form.description} onChange={handleChange} rows="4" placeholder="Full product description…" required className={`${input} resize-none`} />
+                            <textarea name="description" value={form.description} onChange={handleChange}
+                                rows="4" placeholder="Full product description…" required className={`${input} resize-none`} />
                         </Field>
                     </Section>
 
                     <Section title="Pricing & Stock">
                         <div className="grid grid-cols-2 gap-3">
                             <Field label="Regular Price (₹)" required>
-                                <input type="number" name="regularPrice" value={form.regularPrice} onChange={handleChange} min="0" placeholder="0" required className={input} />
+                                <input type="number" name="regularPrice" value={form.regularPrice} onChange={handleChange}
+                                    min="0" placeholder="0" required className={input} />
                             </Field>
                             <Field label="Sale Price (₹)">
-                                <input type="number" name="salePrice" value={form.salePrice} onChange={handleChange} min="0" placeholder="0" className={input} />
+                                <input type="number" name="salePrice" value={form.salePrice} onChange={handleChange}
+                                    min="0" placeholder="0" className={input} />
                             </Field>
                         </div>
                         {!form.hasVariants && (
                             <div className="grid grid-cols-2 gap-3">
                                 <Field label="SKU">
-                                    <input type="text" name="sku" value={form.sku} onChange={handleChange} placeholder="SKU-001" className={`${input} font-mono`} />
+                                    <input type="text" name="sku" value={form.sku} onChange={handleChange}
+                                        placeholder="SKU-001" className={`${input} font-mono`} />
                                 </Field>
                                 <Field label="Stock">
-                                    <input type="number" name="stock" value={form.stock} onChange={handleChange} min="0" placeholder="0" className={input} />
+                                    <input type="number" name="stock" value={form.stock} onChange={handleChange}
+                                        min="0" placeholder="0" className={input} />
                                 </Field>
                             </div>
                         )}
@@ -274,7 +317,8 @@ export default function CreateProduct() {
 
                     <Section title="Variants">
                         <label className="flex items-center gap-2 cursor-pointer">
-                            <input type="checkbox" name="hasVariants" checked={form.hasVariants} onChange={handleChange} className="w-3.5 h-3.5 rounded border-gray-300 text-slate-700" />
+                            <input type="checkbox" name="hasVariants" checked={form.hasVariants} onChange={handleChange}
+                                className="w-3.5 h-3.5 rounded border-gray-300 text-slate-700" />
                             <span className="text-sm text-gray-700">This product has size / color variants</span>
                         </label>
                         {form.hasVariants && (
@@ -284,20 +328,28 @@ export default function CreateProduct() {
                                 </div>
                                 {variants.map((v, i) => (
                                     <div key={i} className="grid grid-cols-4 gap-2 items-center">
-                                        <input value={v.size} onChange={e => handleVariantChange(i, "size", e.target.value)} placeholder="M" className={inputSm} />
-                                        <input value={v.color} onChange={e => handleVariantChange(i, "color", e.target.value)} placeholder="Red" className={inputSm} />
-                                        <input value={v.sku} onChange={e => handleVariantChange(i, "sku", e.target.value)} placeholder="SKU-M-R" required={form.hasVariants} className={`${inputSm} font-mono`} />
+                                        <input value={v.size} onChange={e => handleVariantChange(i, "size", e.target.value)}
+                                            placeholder="M" className={inputSm} />
+                                        <input value={v.color} onChange={e => handleVariantChange(i, "color", e.target.value)}
+                                            placeholder="Red" className={inputSm} />
+                                        <input value={v.sku} onChange={e => handleVariantChange(i, "sku", e.target.value)}
+                                            placeholder="SKU-M-R" required={form.hasVariants} className={`${inputSm} font-mono`} />
                                         <div className="flex gap-1.5">
-                                            <input type="number" value={v.stock} onChange={e => handleVariantChange(i, "stock", e.target.value)} placeholder="0" min="0" className={inputSm} />
+                                            <input type="number" value={v.stock} onChange={e => handleVariantChange(i, "stock", e.target.value)}
+                                                placeholder="0" min="0" className={inputSm} />
                                             {variants.length > 1 && (
-                                                <button type="button" onClick={() => removeVariant(i)} className="text-gray-300 hover:text-red-400 shrink-0">
-                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                                                <button type="button" onClick={() => removeVariant(i)}
+                                                    className="text-gray-300 hover:text-red-400 shrink-0">
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+                                                    </svg>
                                                 </button>
                                             )}
                                         </div>
                                     </div>
                                 ))}
-                                <button type="button" onClick={addVariant} className="text-xs text-slate-600 border border-dashed border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50 w-full">
+                                <button type="button" onClick={addVariant}
+                                    className="text-xs text-slate-600 border border-dashed border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50 w-full">
                                     + Add Variant
                                 </button>
                             </div>
@@ -306,18 +358,20 @@ export default function CreateProduct() {
 
                     <Section title="Tags & SEO">
                         <Field label="Tags" hint="Comma separated">
-                            <input type="text" name="tags" value={form.tags} onChange={handleChange} placeholder="cotton, summer, casual" className={input} />
+                            <input type="text" name="tags" value={form.tags} onChange={handleChange}
+                                placeholder="cotton, summer, casual" className={input} />
                         </Field>
                         <Field label="SEO Title">
                             <input type="text" name="seoTitle" value={form.seoTitle} onChange={handleChange} className={input} />
                         </Field>
                         <Field label="SEO Description">
-                            <textarea name="seoDescription" value={form.seoDescription} onChange={handleChange} rows="2" className={`${input} resize-none`} />
+                            <textarea name="seoDescription" value={form.seoDescription} onChange={handleChange}
+                                rows="2" className={`${input} resize-none`} />
                         </Field>
                     </Section>
                 </div>
 
-                {/* RIGHT COLUMN */}
+                {/* ── RIGHT COLUMN ───────────────────────────────────────── */}
                 <div className="w-64 shrink-0 space-y-4">
 
                     <Section title="Publish">
@@ -329,15 +383,16 @@ export default function CreateProduct() {
                             </select>
                         </Field>
                         <label className="flex items-center gap-2 cursor-pointer mt-1">
-                            <input type="checkbox" name="featured" checked={form.featured} onChange={handleChange} className="w-3.5 h-3.5 rounded border-gray-300 text-slate-700" />
+                            <input type="checkbox" name="featured" checked={form.featured} onChange={handleChange}
+                                className="w-3.5 h-3.5 rounded border-gray-300 text-slate-700" />
                             <span className="text-sm text-gray-700">Featured product</span>
                         </label>
                     </Section>
 
-                    {/* Main Image — single */}
-                    <Section title={<>Main Image <span className="text-red-500">*</span></>}>
+                    {/* Main Image */}
+                    <Section title={<>Main Image {!isEdit && <span className="text-red-500">*</span>}</>}>
                         <p className="text-xs text-gray-400 -mt-1 mb-2">Primary photo · 800×800px</p>
-                        {!mainPreview ? (
+                        {!hasMainImage ? (
                             <div onClick={() => mainRef.current?.click()}
                                 className="border-2 border-dashed border-gray-200 rounded-xl py-6 flex flex-col items-center cursor-pointer hover:border-slate-400 hover:bg-gray-50 transition-colors">
                                 <ImgIcon />
@@ -346,7 +401,14 @@ export default function CreateProduct() {
                             </div>
                         ) : (
                             <div className="relative group rounded-xl overflow-hidden border border-gray-200">
-                                <img src={mainPreview} alt="Main" className="w-full h-40 object-cover" />
+                                <img src={mainDisplaySrc} alt="Main" className="w-full h-40 object-cover" />
+                                {/* Badge: shows whether it's the saved image or a new pick */}
+                                {existingMainImage && !mainPreview && (
+                                    <span className="absolute top-2 left-2 bg-black bg-opacity-50 text-white text-xs px-1.5 py-0.5 rounded">Saved</span>
+                                )}
+                                {mainPreview && (
+                                    <span className="absolute top-2 left-2 bg-blue-500 text-white text-xs px-1.5 py-0.5 rounded">New</span>
+                                )}
                                 <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 transition-all" />
                                 <button type="button" onClick={removeMain}
                                     className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs hover:bg-red-600 shadow">✕</button>
@@ -359,21 +421,33 @@ export default function CreateProduct() {
                         <input ref={mainRef} type="file" accept="image/*" onChange={handleMainImage} className="hidden" />
                     </Section>
 
-                    {/* Gallery — multiple */}
+                    {/* Gallery */}
                     <Section title="Gallery Images">
                         <p className="text-xs text-gray-400 -mt-1 mb-2">Featured & extra photos · 1200×630px</p>
 
-                        {/* Existing thumbnails */}
-                        {gallery.length > 0 && (
+                        {totalGalleryCount > 0 && (
                             <div className="grid grid-cols-3 gap-1.5 mb-2">
-                                {gallery.map((g, i) => (
-                                    <div key={i} className="relative group aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-100">
-                                        <img src={g.preview} alt={`Gallery ${i + 1}`} className="w-full h-full object-cover" />
-                                        <button type="button" onClick={() => removeGalleryItem(i)}
+                                {/* Existing (server) gallery images */}
+                                {existingGallery.map((url, i) => (
+                                    <div key={`existing-${i}`}
+                                        className="relative group aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-100">
+                                        <img src={url} alt={`Gallery ${i + 1}`} className="w-full h-full object-cover" />
+                                        <button type="button" onClick={() => removeExistingGalleryItem(url)}
                                             className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600">✕</button>
-                                        {i === 0 && (
+                                        {i === 0 && existingGallery.length > 0 && (
                                             <span className="absolute bottom-1 left-1 bg-black bg-opacity-50 text-white text-xs px-1 rounded">Cover</span>
                                         )}
+                                    </div>
+                                ))}
+
+                                {/* Newly picked gallery images */}
+                                {gallery.map((g, i) => (
+                                    <div key={`new-${i}`}
+                                        className="relative group aspect-square rounded-lg overflow-hidden border border-blue-200 bg-gray-100">
+                                        <img src={g.preview} alt={`New ${i + 1}`} className="w-full h-full object-cover" />
+                                        <span className="absolute top-1 left-1 bg-blue-500 text-white text-xs px-1 rounded leading-tight">New</span>
+                                        <button type="button" onClick={() => removeGalleryItem(i)}
+                                            className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600">✕</button>
                                     </div>
                                 ))}
 
@@ -386,8 +460,7 @@ export default function CreateProduct() {
                             </div>
                         )}
 
-                        {/* Empty state */}
-                        {gallery.length === 0 && (
+                        {totalGalleryCount === 0 && (
                             <div onClick={() => galleryRef.current?.click()}
                                 className="border-2 border-dashed border-gray-200 rounded-xl py-6 flex flex-col items-center cursor-pointer hover:border-slate-400 hover:bg-gray-50 transition-colors">
                                 <ImgIcon />
@@ -398,8 +471,12 @@ export default function CreateProduct() {
                         )}
 
                         <input ref={galleryRef} type="file" accept="image/*" multiple onChange={handleGalleryAdd} className="hidden" />
-                        {gallery.length > 0 && (
-                            <p className="text-xs text-gray-400 text-center">{gallery.length} image{gallery.length > 1 ? "s" : ""} · first marked as cover</p>
+
+                        {totalGalleryCount > 0 && (
+                            <p className="text-xs text-gray-400 text-center">
+                                {totalGalleryCount} image{totalGalleryCount > 1 ? "s" : ""}
+                                {gallery.length > 0 && ` · ${gallery.length} new`}
+                            </p>
                         )}
                     </Section>
 
@@ -409,9 +486,11 @@ export default function CreateProduct() {
     );
 }
 
+// ── Style constants ────────────────────────────────────────────────────────────
 const input = "w-full text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-slate-400 placeholder-gray-300 bg-white";
 const inputSm = "w-full text-sm border border-gray-300 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-slate-400 placeholder-gray-300";
 
+// ── Sub-components (unchanged) ─────────────────────────────────────────────────
 function Section({ title, children }) {
     return (
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
@@ -439,7 +518,8 @@ function Field({ label, required, hint, children }) {
 function ImgIcon() {
     return (
         <svg className="w-6 h-6 text-gray-300 mb-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586A2 2 0 0111 11h2a2 2 0 011.414.586L19 16M14 8a2 2 0 11-4 0 2 2 0 014 0zM5 20h14a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v14a1 1 0 001 1z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M4 16l4.586-4.586A2 2 0 0111 11h2a2 2 0 011.414.586L19 16M14 8a2 2 0 11-4 0 2 2 0 014 0zM5 20h14a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v14a1 1 0 001 1z" />
         </svg>
     );
 }
