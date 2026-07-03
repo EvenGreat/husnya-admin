@@ -7,6 +7,7 @@ import MainLayout from "../component/layout/MainLayout";
 import CreateCategory from "../pages/category/CreateCategory";
 import CreateProduct from "../pages/CreateProduct";
 import ProductList from "../pages/ProductList";
+import CreateCollection from "../pages/category/Collection";
 
 export default function AppRoutes() {
     return (
@@ -18,6 +19,7 @@ export default function AppRoutes() {
                 <Route path="/category" element={<CreateCategory />} />
                 <Route path="/product-list" element={<CreateProduct />} />
                 <Route path="/products" element={<ProductList />} />
+                <Route path="/collection" element={<CreateCollection />} />
             </Route>
         </Routes>
     );

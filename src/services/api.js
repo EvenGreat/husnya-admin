@@ -3,10 +3,6 @@ import axios from "axios";
 export const apiAdmin = axios.create({
     baseURL: "http://localhost:3000/api",
     // baseURL: "https://api.husnya.com/api",
-
-    headers: {
-        "Content-Type": "application/json",
-    },
 });
 
 apiAdmin.interceptors.request.use(

@@ -53,3 +53,35 @@ export const createProduct = (formData) => {
 export const fetchProduct = () => {
     return apiAdmin.get("/prod/get/all/products");
 }
+
+export const createCollection = (data) => {
+    return apiAdmin.post(
+        "/collectio/v1/create/collection",
+        data,
+        {
+            headers: {
+                "Content-Type": "multipart/form-data",
+            },
+        }
+    );
+};
+
+export const getAllCollection = () => {
+    return apiAdmin.get("/collectio/v1/fetch/collection/all");
+}
+
+export const getCollaetionById = (id) => {
+    return apiAdmin.get(`/collectio/v1/fetch/collection/${id}}`)
+}
+
+export const updateCollection = (id, data) => {
+    return apiAdmin.put(`/collectio/v1/update/collection/${id}`, data, {
+        headers: {
+            "Content-Type": "multipart/form-data",
+        },
+    })
+}
+
+export const deleteCollection = (id) => {
+    return apiAdmin.delete(`/collectio/v1/collection/delete/${id}`)
+}

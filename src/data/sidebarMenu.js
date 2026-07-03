@@ -24,6 +24,11 @@ export const sidebarMenu = [
         icon: FaBoxOpen,
     },
     {
+        label: "Collections",
+        path: "/collection",
+        icon: FaBoxOpen,
+    },
+    {
         label: "Orders",
         path: "/orders",
         icon: FaShoppingCart,
