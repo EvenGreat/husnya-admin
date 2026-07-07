@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { createProduct, fetchCategory } from "../services/authService";
+import { createProduct, fetchCategory, getAllCollection } from "../services/authService";
 
 const EMPTY = {
-    name: "", slug: "", category: "", description: "", shortDescription: "",
+    name: "", slug: "", category: "", collection: "", description: "", shortDescription: "",
     brand: "Frrit", regularPrice: "", salePrice: "", sku: "", stock: "",
     hasVariants: false, tags: "", status: "draft", featured: false,
     seoTitle: "", seoDescription: "",
@@ -22,6 +22,7 @@ export default function ProductForm({ productId }) {
 
     const [variants, setVariants] = useState([{ size: "", color: "", sku: "", stock: "" }]);
     const [categories, setCategories] = useState([]);
+    const [collection, setCollection] = useState([]);
     const [loading, setLoading] = useState(false);
     const [fetching, setFetching] = useState(isEdit);
 
@@ -33,45 +34,24 @@ export default function ProductForm({ productId }) {
             .then(res => setCategories(Array.isArray(res.data?.categories) ? res.data.categories : []))
             .catch(console.error);
     }, []);
-    
-    // useEffect(() => {
-    //     if (!isEdit) return;
 
-    //     setFetching(true);
-    //     fetchProductById(productId)
-    //         .then(res => {
-    //             const p = res.data?.product ?? res.data;
+    useEffect(() => {
+        const fetCollection = async () => {
+            try {
+                const rs = await getAllCollection();
+                setCollection(
+                    Array.isArray(rs.data?.collections)
+                        ? rs.data.collections
+                        : []
+                );
+            } catch (error) {
+                console.error(error);
+            }
+        }
+        fetCollection();
+    }, [])
+    console.log(collection)
 
-    //             setForm({
-    //                 name: p.name ?? "",
-    //                 slug: p.slug ?? "",
-    //                 category: p.category?._id ?? p.category ?? "",
-    //                 description: p.description ?? "",
-    //                 shortDescription: p.shortDescription ?? "",
-    //                 brand: p.brand ?? "Frrit",
-    //                 regularPrice: p.regularPrice ?? "",
-    //                 salePrice: p.salePrice ?? "",
-    //                 sku: p.sku ?? "",
-    //                 stock: p.stock ?? "",
-    //                 hasVariants: p.hasVariants ?? false,
-    //                 tags: Array.isArray(p.tags) ? p.tags.join(", ") : (p.tags ?? ""),
-    //                 status: p.status ?? "draft",
-    //                 featured: p.featured ?? false,
-    //                 seoTitle: p.seoTitle ?? "",
-    //                 seoDescription: p.seoDescription ?? "",
-    //             });
-
-    //             const imgs = p.images ?? [];
-    //             if (imgs.length > 0) setExistingMainImage(imgs[0]);
-    //             if (imgs.length > 1) setExistingGallery(imgs.slice(1));
-
-    //             if (p.variants?.length) setVariants(p.variants);
-    //         })
-    //         .catch(console.error)
-    //         .finally(() => setFetching(false));
-    // }, [productId, isEdit]);
-
-    // ── Form helpers ──────────────────────────────────────────────────────────
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
         setForm(p => ({ ...p, [name]: type === "checkbox" ? checked : value }));
@@ -131,13 +111,11 @@ export default function ProductForm({ productId }) {
 
     const totalGalleryCount = existingGallery.length + gallery.length;
 
-    // ── Variants ──────────────────────────────────────────────────────────────
     const handleVariantChange = (i, field, val) =>
         setVariants(prev => prev.map((v, idx) => idx === i ? { ...v, [field]: val } : v));
     const addVariant = () => setVariants(p => [...p, { size: "", color: "", sku: "", stock: "" }]);
     const removeVariant = (i) => setVariants(p => p.filter((_, idx) => idx !== i));
 
-    // ── Submit ────────────────────────────────────────────────────────────────
     const handleSubmit = async (e) => {
         e.preventDefault();
 
@@ -169,17 +147,11 @@ export default function ProductForm({ productId }) {
             gallery.forEach(item => payload.append("images", item.file));
 
             if (form.hasVariants) payload.append("variants", JSON.stringify(variants));
-
-            // Tell the backend which existing images to delete (edit mode)
             if (isEdit && removedExistingImages.length) {
                 payload.append("removedImages", JSON.stringify(removedExistingImages));
             }
+            const response = await createProduct(payload);
 
-            // const response = isEdit
-            //     ? await updateProduct(productId, payload)
-            //     : await createProduct(payload);
-            const response = '';
-            
 
             alert(response?.data?.message || (isEdit ? "Product updated successfully" : "Product created successfully"));
 
@@ -214,7 +186,6 @@ export default function ProductForm({ productId }) {
         }
     };
 
-    // ── Loading skeleton while fetching in edit mode ──────────────────────────
     if (fetching) {
         return (
             <div className="max-w-5xl mx-auto space-y-4 animate-pulse">
@@ -276,10 +247,26 @@ export default function ProductForm({ productId }) {
                                     ))}
                                 </select>
                             </Field>
+                            <Field label="Collection">
+                                <select
+                                    name="collection"
+                                    value={form.collection}
+                                    onChange={handleChange}
+                                    className={input}
+                                >
+                                    <option value="">Select Collection</option>
+                                    {collection.map(item => (
+                                        <option key={item._id} value={item._id}>
+                                            {item.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </Field>
                             <Field label="Brand">
                                 <input type="text" name="brand" value={form.brand} onChange={handleChange} className={input} />
                             </Field>
                         </div>
+
                         <Field label="Short Description">
                             <textarea name="shortDescription" value={form.shortDescription} onChange={handleChange}
                                 rows="2" placeholder="One-line product summary…" className={`${input} resize-none`} />
