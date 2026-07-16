@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { createProduct, fetchCategory, getAllCollection } from "../services/authService";
+import JoditInput from "../component/JoditInput";
 
 const EMPTY = {
     name: "", slug: "", category: "", collection: "", description: "", shortDescription: "",
@@ -7,6 +8,17 @@ const EMPTY = {
     hasVariants: false, tags: "", status: "draft", featured: false,
     seoTitle: "", seoDescription: "",
 };
+
+const emptySizeRow = () => ({ size: "", sku: "", stock: "" });
+const emptyColorGroup = () => ({
+    id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
+    color: "",
+    images: [],           // { file, preview } - newly picked, per color
+    existingImages: [],   // urls already saved on the server for this color (edit mode)
+    removedImages: [],    // urls the user removed from this color (edit mode)
+    sizes: [emptySizeRow()],
+});
+
 export default function ProductForm({ productId }) {
     const isEdit = Boolean(productId);
 
@@ -20,7 +32,9 @@ export default function ProductForm({ productId }) {
 
     const [gallery, setGallery] = useState([]);
 
-    const [variants, setVariants] = useState([{ size: "", color: "", sku: "", stock: "" }]);
+    // Variants are now grouped by color. Each group owns its own images + size rows.
+    const [colorVariants, setColorVariants] = useState([emptyColorGroup()]);
+
     const [categories, setCategories] = useState([]);
     const [collection, setCollection] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -50,7 +64,6 @@ export default function ProductForm({ productId }) {
         }
         fetCollection();
     }, [])
-    console.log(collection)
 
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
@@ -91,7 +104,7 @@ export default function ProductForm({ productId }) {
     const hasMainImage = mainPreview || existingMainImage;
     const mainDisplaySrc = mainPreview ?? existingMainImage;
 
-    // ── Gallery ───────────────────────────────────────────────────────────────
+    // ── Gallery (only used when the product has no variants) ───────────────────
     const handleGalleryAdd = (e) => {
         const files = Array.from(e.target.files);
         const newItems = files.map(file => ({ file, preview: URL.createObjectURL(file) }));
@@ -111,10 +124,68 @@ export default function ProductForm({ productId }) {
 
     const totalGalleryCount = existingGallery.length + gallery.length;
 
-    const handleVariantChange = (i, field, val) =>
-        setVariants(prev => prev.map((v, idx) => idx === i ? { ...v, [field]: val } : v));
-    const addVariant = () => setVariants(p => [...p, { size: "", color: "", sku: "", stock: "" }]);
-    const removeVariant = (i) => setVariants(p => p.filter((_, idx) => idx !== i));
+    // ── Color variants ───────────────────────────────────────────────────────
+    const addColorGroup = () => setColorVariants(p => [...p, emptyColorGroup()]);
+
+    const removeColorGroup = (gi) => {
+        setColorVariants(prev => {
+            prev[gi]?.images.forEach(img => URL.revokeObjectURL(img.preview));
+            return prev.filter((_, i) => i !== gi);
+        });
+    };
+
+    const updateColorName = (gi, value) =>
+        setColorVariants(prev => prev.map((g, i) => (i === gi ? { ...g, color: value } : g)));
+
+    const addSizeRow = (gi) =>
+        setColorVariants(prev => prev.map((g, i) =>
+            i === gi ? { ...g, sizes: [...g.sizes, emptySizeRow()] } : g
+        ));
+
+    const removeSizeRow = (gi, si) =>
+        setColorVariants(prev => prev.map((g, i) =>
+            i === gi ? { ...g, sizes: g.sizes.filter((_, idx) => idx !== si) } : g
+        ));
+
+    const updateSizeField = (gi, si, field, val) =>
+        setColorVariants(prev => prev.map((g, i) =>
+            i === gi
+                ? { ...g, sizes: g.sizes.map((s, idx) => (idx === si ? { ...s, [field]: val } : s)) }
+                : g
+        ));
+
+    const handleVariantImageAdd = (gi, fileList) => {
+        const files = Array.from(fileList);
+        const newItems = files.map(file => ({ file, preview: URL.createObjectURL(file) }));
+        setColorVariants(prev => prev.map((g, i) =>
+            i === gi ? { ...g, images: [...g.images, ...newItems] } : g
+        ));
+    };
+
+    const removeVariantImage = (gi, ii) => {
+        setColorVariants(prev => prev.map((g, i) => {
+            if (i !== gi) return g;
+            URL.revokeObjectURL(g.images[ii].preview);
+            return { ...g, images: g.images.filter((_, idx) => idx !== ii) };
+        }));
+    };
+
+    const removeExistingVariantImage = (gi, url) => {
+        setColorVariants(prev => prev.map((g, i) =>
+            i === gi
+                ? {
+                    ...g,
+                    existingImages: g.existingImages.filter(u => u !== url),
+                    removedImages: [...g.removedImages, url],
+                }
+                : g
+        ));
+    };
+
+    const resetColorVariants = () => {
+        colorVariants.forEach(g => g.images.forEach(img => URL.revokeObjectURL(img.preview)));
+        setColorVariants([emptyColorGroup()]);
+    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -124,16 +195,26 @@ export default function ProductForm({ productId }) {
         if (!form.description.trim()) return alert("Description is required");
         if (!form.regularPrice) return alert("Regular price is required");
 
-        // In create mode a main image is mandatory; in edit it may already exist
         if (!isEdit && !mainImage) return alert("Main product image is required");
 
         if (form.hasVariants) {
-            if (variants.length === 0) return alert("At least one variant is required");
+            if (colorVariants.length === 0) return alert("At least one color variant is required");
+
             const skuSet = new Set();
-            for (const v of variants) {
-                if (!v.sku?.trim()) return alert("All variants must have a SKU");
-                if (skuSet.has(v.sku.trim())) return alert("Variant SKUs must be unique");
-                skuSet.add(v.sku.trim());
+            for (const group of colorVariants) {
+                const colorLabel = group.color.trim() || "a variant";
+                if (!group.color.trim()) return alert("Every variant needs a color name");
+
+                const totalImages = group.existingImages.length + group.images.length;
+                if (totalImages === 0) return alert(`Add at least one image for "${colorLabel}"`);
+
+                if (group.sizes.length === 0) return alert(`Add at least one size for "${colorLabel}"`);
+
+                for (const s of group.sizes) {
+                    if (!s.sku?.trim()) return alert(`All sizes for "${colorLabel}" must have a SKU`);
+                    if (skuSet.has(s.sku.trim())) return alert("Variant SKUs must be unique across all colors");
+                    skuSet.add(s.sku.trim());
+                }
             }
         }
 
@@ -144,19 +225,40 @@ export default function ProductForm({ productId }) {
             Object.entries(form).forEach(([key, value]) => payload.append(key, value));
 
             if (mainImage) payload.append("images", mainImage);
-            gallery.forEach(item => payload.append("images", item.file));
 
-            if (form.hasVariants) payload.append("variants", JSON.stringify(variants));
+            if (form.hasVariants) {
+                // Color/size metadata goes up as JSON; each color's photos ride under
+                // their own field name so the backend can match them back up.
+                const variantsPayload = colorVariants.map(g => ({
+                    color: g.color,
+                    sizes: g.sizes,
+                }));
+                payload.append("variants", JSON.stringify(variantsPayload));
+
+                colorVariants.forEach((g, gi) => {
+                    g.images.forEach(img => payload.append(`variantImages_${gi}`, img.file));
+                });
+
+                if (isEdit) {
+                    const removedVariantImages = colorVariants.flatMap(g => g.removedImages);
+                    if (removedVariantImages.length) {
+                        payload.append("removedVariantImages", JSON.stringify(removedVariantImages));
+                    }
+                }
+            } else {
+                // General gallery only applies to non-variant products
+                gallery.forEach(item => payload.append("images", item.file));
+            }
+
             if (isEdit && removedExistingImages.length) {
                 payload.append("removedImages", JSON.stringify(removedExistingImages));
             }
-            const response = await createProduct(payload);
 
+            const response = await createProduct(payload);
 
             alert(response?.data?.message || (isEdit ? "Product updated successfully" : "Product created successfully"));
 
             if (!isEdit) {
-                // Full reset only on create; on edit we stay on the page
                 if (mainPreview) URL.revokeObjectURL(mainPreview);
                 gallery.forEach(g => URL.revokeObjectURL(g.preview));
 
@@ -164,15 +266,16 @@ export default function ProductForm({ productId }) {
                 setMainImage(null);
                 setMainPreview(null);
                 setGallery([]);
-                setVariants([{ size: "", color: "", sku: "", stock: "" }]);
+                resetColorVariants();
                 if (mainRef.current) mainRef.current.value = "";
                 if (galleryRef.current) galleryRef.current.value = "";
             } else {
-                // Clear only the newly-picked files; existing images stay
                 gallery.forEach(g => URL.revokeObjectURL(g.preview));
                 setGallery([]);
                 setMainImage(null);
                 setRemovedExistingImages([]);
+                colorVariants.forEach(g => g.images.forEach(img => URL.revokeObjectURL(img.preview)));
+                setColorVariants(prev => prev.map(g => ({ ...g, images: [], removedImages: [] })));
                 if (mainRef.current) mainRef.current.value = "";
                 if (galleryRef.current) galleryRef.current.value = "";
             }
@@ -196,7 +299,6 @@ export default function ProductForm({ productId }) {
         );
     }
 
-    // ── Render ────────────────────────────────────────────────────────────────
     return (
         <form onSubmit={handleSubmit} className="max-w-5xl mx-auto">
             <div className="flex items-center justify-between mb-4">
@@ -268,12 +370,27 @@ export default function ProductForm({ productId }) {
                         </div>
 
                         <Field label="Short Description">
-                            <textarea name="shortDescription" value={form.shortDescription} onChange={handleChange}
-                                rows="2" placeholder="One-line product summary…" className={`${input} resize-none`} />
+                            <JoditInput
+                                height={180}
+                                value={form.shortDescription}
+                                onChange={(value) =>
+                                    setForm((prev) => ({
+                                        ...prev,
+                                        shortDescription: value,
+                                    }))
+                                }
+                            />
                         </Field>
                         <Field label="Description" required>
-                            <textarea name="description" value={form.description} onChange={handleChange}
-                                rows="4" placeholder="Full product description…" required className={`${input} resize-none`} />
+                            <JoditInput
+                                value={form.description}
+                                onChange={(value) =>
+                                    setForm((prev) => ({
+                                        ...prev,
+                                        description: value,
+                                    }))
+                                }
+                            />
                         </Field>
                     </Section>
 
@@ -300,44 +417,116 @@ export default function ProductForm({ productId }) {
                                 </Field>
                             </div>
                         )}
+                        {form.hasVariants && (
+                            <p className="text-xs text-gray-400">
+                                SKU and stock are tracked per size, inside each color variant below.
+                            </p>
+                        )}
                     </Section>
 
                     <Section title="Variants">
                         <label className="flex items-center gap-2 cursor-pointer">
                             <input type="checkbox" name="hasVariants" checked={form.hasVariants} onChange={handleChange}
                                 className="w-3.5 h-3.5 rounded border-gray-300 text-slate-700" />
-                            <span className="text-sm text-gray-700">This product has size / color variants</span>
+                            <span className="text-sm text-gray-700">This product has color / size variants</span>
                         </label>
+
                         {form.hasVariants && (
-                            <div className="space-y-2 mt-1">
-                                <div className="grid grid-cols-4 gap-2 text-xs font-medium text-gray-500 px-1">
-                                    <span>Size</span><span>Color</span><span>SKU</span><span>Stock</span>
-                                </div>
-                                {variants.map((v, i) => (
-                                    <div key={i} className="grid grid-cols-4 gap-2 items-center">
-                                        <input value={v.size} onChange={e => handleVariantChange(i, "size", e.target.value)}
-                                            placeholder="M" className={inputSm} />
-                                        <input value={v.color} onChange={e => handleVariantChange(i, "color", e.target.value)}
-                                            placeholder="Red" className={inputSm} />
-                                        <input value={v.sku} onChange={e => handleVariantChange(i, "sku", e.target.value)}
-                                            placeholder="SKU-M-R" required={form.hasVariants} className={`${inputSm} font-mono`} />
-                                        <div className="flex gap-1.5">
-                                            <input type="number" value={v.stock} onChange={e => handleVariantChange(i, "stock", e.target.value)}
-                                                placeholder="0" min="0" className={inputSm} />
-                                            {variants.length > 1 && (
-                                                <button type="button" onClick={() => removeVariant(i)}
-                                                    className="text-gray-300 hover:text-red-400 shrink-0">
-                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
-                                                    </svg>
+                            <div className="space-y-4 mt-2">
+                                {colorVariants.map((group, gi) => {
+                                    const totalGroupImages = group.existingImages.length + group.images.length;
+                                    return (
+                                        <div key={group.id} className="border border-gray-200 rounded-xl p-3 space-y-3 bg-gray-50/60">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <input
+                                                    value={group.color}
+                                                    onChange={e => updateColorName(gi, e.target.value)}
+                                                    placeholder="Color e.g. Red"
+                                                    required
+                                                    className={`${inputSm} font-medium max-w-[220px] bg-white`}
+                                                />
+                                                {colorVariants.length > 1 && (
+                                                    <button type="button" onClick={() => removeColorGroup(gi)}
+                                                        className="text-gray-300 hover:text-red-400 shrink-0">
+                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+                                                        </svg>
+                                                    </button>
+                                                )}
+                                            </div>
+
+                                            {/* Color-specific images */}
+                                            <div>
+                                                <p className="text-xs font-medium text-gray-500 mb-1">
+                                                    Images for {group.color.trim() || "this color"}
+                                                    {totalGroupImages === 0 && <span className="text-red-400"> · required</span>}
+                                                </p>
+                                                <div className="grid grid-cols-5 gap-1.5">
+                                                    {group.existingImages.map((url, ii) => (
+                                                        <div key={`existing-${ii}`}
+                                                            className="relative group aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-100">
+                                                            <img src={url} alt="" className="w-full h-full object-cover" />
+                                                            <span className="absolute bottom-1 left-1 bg-black bg-opacity-50 text-white text-xs px-1 rounded">Saved</span>
+                                                            <button type="button" onClick={() => removeExistingVariantImage(gi, url)}
+                                                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600">✕</button>
+                                                        </div>
+                                                    ))}
+                                                    {group.images.map((img, ii) => (
+                                                        <div key={`new-${ii}`}
+                                                            className="relative group aspect-square rounded-lg overflow-hidden border border-blue-200 bg-gray-100">
+                                                            <img src={img.preview} alt="" className="w-full h-full object-cover" />
+                                                            <span className="absolute top-1 left-1 bg-blue-500 text-white text-xs px-1 rounded leading-tight">New</span>
+                                                            <button type="button" onClick={() => removeVariantImage(gi, ii)}
+                                                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600">✕</button>
+                                                        </div>
+                                                    ))}
+                                                    <label className="aspect-square rounded-lg border-2 border-dashed border-gray-200 flex flex-col items-center justify-center cursor-pointer hover:border-slate-400 hover:bg-white transition-colors">
+                                                        <span className="text-lg text-gray-300 leading-none">+</span>
+                                                        <input type="file" accept="image/*" multiple className="hidden"
+                                                            onChange={e => { handleVariantImageAdd(gi, e.target.files); e.target.value = ""; }} />
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            {/* Sizes for this color */}
+                                            <div>
+                                                <div className="grid grid-cols-3 gap-2 text-xs font-medium text-gray-500 px-1">
+                                                    <span>Size</span><span>SKU</span><span>Stock</span>
+                                                </div>
+                                                <div className="space-y-1.5 mt-1">
+                                                    {group.sizes.map((s, si) => (
+                                                        <div key={si} className="grid grid-cols-3 gap-2 items-center">
+                                                            <input value={s.size} onChange={e => updateSizeField(gi, si, "size", e.target.value)}
+                                                                placeholder="M" className={`${inputSm} bg-white`} />
+                                                            <input value={s.sku} onChange={e => updateSizeField(gi, si, "sku", e.target.value)}
+                                                                placeholder="SKU-RED-M" required className={`${inputSm} font-mono bg-white`} />
+                                                            <div className="flex gap-1.5">
+                                                                <input type="number" value={s.stock} onChange={e => updateSizeField(gi, si, "stock", e.target.value)}
+                                                                    placeholder="0" min="0" className={`${inputSm} bg-white`} />
+                                                                {group.sizes.length > 1 && (
+                                                                    <button type="button" onClick={() => removeSizeRow(gi, si)}
+                                                                        className="text-gray-300 hover:text-red-400 shrink-0">
+                                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+                                                                        </svg>
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <button type="button" onClick={() => addSizeRow(gi)}
+                                                    className="text-xs text-slate-600 border border-dashed border-gray-300 rounded-lg px-3 py-1.5 hover:bg-white w-full mt-1.5">
+                                                    + Add Size
                                                 </button>
-                                            )}
+                                            </div>
                                         </div>
-                                    </div>
-                                ))}
-                                <button type="button" onClick={addVariant}
-                                    className="text-xs text-slate-600 border border-dashed border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50 w-full">
-                                    + Add Variant
+                                    );
+                                })}
+
+                                <button type="button" onClick={addColorGroup}
+                                    className="text-xs text-slate-700 border border-dashed border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 w-full font-medium">
+                                    + Add Color Variant
                                 </button>
                             </div>
                         )}
@@ -352,8 +541,16 @@ export default function ProductForm({ productId }) {
                             <input type="text" name="seoTitle" value={form.seoTitle} onChange={handleChange} className={input} />
                         </Field>
                         <Field label="SEO Description">
-                            <textarea name="seoDescription" value={form.seoDescription} onChange={handleChange}
-                                rows="2" className={`${input} resize-none`} />
+                            <JoditInput
+                                height={180}
+                                value={form.seoDescription}
+                                onChange={(value) =>
+                                    setForm((prev) => ({
+                                        ...prev,
+                                        seoDescription: value,
+                                    }))
+                                }
+                            />
                         </Field>
                     </Section>
                 </div>
@@ -408,64 +605,67 @@ export default function ProductForm({ productId }) {
                         <input ref={mainRef} type="file" accept="image/*" onChange={handleMainImage} className="hidden" />
                     </Section>
 
-                    {/* Gallery */}
-                    <Section title="Gallery Images">
-                        <p className="text-xs text-gray-400 -mt-1 mb-2">Featured & extra photos · 1200×630px</p>
+                    {/* Gallery - only relevant when the product has no color variants,
+                        since variant photos are managed per-color in the Variants section */}
+                    {!form.hasVariants && (
+                        <Section title="Gallery Images">
+                            <p className="text-xs text-gray-400 -mt-1 mb-2">Featured & extra photos · 1200×630px</p>
 
-                        {totalGalleryCount > 0 && (
-                            <div className="grid grid-cols-3 gap-1.5 mb-2">
-                                {/* Existing (server) gallery images */}
-                                {existingGallery.map((url, i) => (
-                                    <div key={`existing-${i}`}
-                                        className="relative group aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-100">
-                                        <img src={url} alt={`Gallery ${i + 1}`} className="w-full h-full object-cover" />
-                                        <button type="button" onClick={() => removeExistingGalleryItem(url)}
-                                            className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600">✕</button>
-                                        {i === 0 && existingGallery.length > 0 && (
-                                            <span className="absolute bottom-1 left-1 bg-black bg-opacity-50 text-white text-xs px-1 rounded">Cover</span>
-                                        )}
+                            {totalGalleryCount > 0 && (
+                                <div className="grid grid-cols-3 gap-1.5 mb-2">
+                                    {/* Existing (server) gallery images */}
+                                    {existingGallery.map((url, i) => (
+                                        <div key={`existing-${i}`}
+                                            className="relative group aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-100">
+                                            <img src={url} alt={`Gallery ${i + 1}`} className="w-full h-full object-cover" />
+                                            <button type="button" onClick={() => removeExistingGalleryItem(url)}
+                                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600">✕</button>
+                                            {i === 0 && existingGallery.length > 0 && (
+                                                <span className="absolute bottom-1 left-1 bg-black bg-opacity-50 text-white text-xs px-1 rounded">Cover</span>
+                                            )}
+                                        </div>
+                                    ))}
+
+                                    {/* Newly picked gallery images */}
+                                    {gallery.map((g, i) => (
+                                        <div key={`new-${i}`}
+                                            className="relative group aspect-square rounded-lg overflow-hidden border border-blue-200 bg-gray-100">
+                                            <img src={g.preview} alt={`New ${i + 1}`} className="w-full h-full object-cover" />
+                                            <span className="absolute top-1 left-1 bg-blue-500 text-white text-xs px-1 rounded leading-tight">New</span>
+                                            <button type="button" onClick={() => removeGalleryItem(i)}
+                                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600">✕</button>
+                                        </div>
+                                    ))}
+
+                                    {/* Add more tile */}
+                                    <div onClick={() => galleryRef.current?.click()}
+                                        className="aspect-square rounded-lg border-2 border-dashed border-gray-200 flex flex-col items-center justify-center cursor-pointer hover:border-slate-400 hover:bg-gray-50 transition-colors">
+                                        <span className="text-xl text-gray-300 leading-none">+</span>
+                                        <span className="text-xs text-gray-400 mt-0.5">Add</span>
                                     </div>
-                                ))}
-
-                                {/* Newly picked gallery images */}
-                                {gallery.map((g, i) => (
-                                    <div key={`new-${i}`}
-                                        className="relative group aspect-square rounded-lg overflow-hidden border border-blue-200 bg-gray-100">
-                                        <img src={g.preview} alt={`New ${i + 1}`} className="w-full h-full object-cover" />
-                                        <span className="absolute top-1 left-1 bg-blue-500 text-white text-xs px-1 rounded leading-tight">New</span>
-                                        <button type="button" onClick={() => removeGalleryItem(i)}
-                                            className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600">✕</button>
-                                    </div>
-                                ))}
-
-                                {/* Add more tile */}
-                                <div onClick={() => galleryRef.current?.click()}
-                                    className="aspect-square rounded-lg border-2 border-dashed border-gray-200 flex flex-col items-center justify-center cursor-pointer hover:border-slate-400 hover:bg-gray-50 transition-colors">
-                                    <span className="text-xl text-gray-300 leading-none">+</span>
-                                    <span className="text-xs text-gray-400 mt-0.5">Add</span>
                                 </div>
-                            </div>
-                        )}
+                            )}
 
-                        {totalGalleryCount === 0 && (
-                            <div onClick={() => galleryRef.current?.click()}
-                                className="border-2 border-dashed border-gray-200 rounded-xl py-6 flex flex-col items-center cursor-pointer hover:border-slate-400 hover:bg-gray-50 transition-colors">
-                                <ImgIcon />
-                                <p className="text-xs text-slate-600 font-medium">Click to upload</p>
-                                <p className="text-xs text-gray-400 mt-0.5">Select multiple files</p>
-                                <p className="text-xs text-gray-300 mt-0.5">PNG, JPG, WEBP</p>
-                            </div>
-                        )}
+                            {totalGalleryCount === 0 && (
+                                <div onClick={() => galleryRef.current?.click()}
+                                    className="border-2 border-dashed border-gray-200 rounded-xl py-6 flex flex-col items-center cursor-pointer hover:border-slate-400 hover:bg-gray-50 transition-colors">
+                                    <ImgIcon />
+                                    <p className="text-xs text-slate-600 font-medium">Click to upload</p>
+                                    <p className="text-xs text-gray-400 mt-0.5">Select multiple files</p>
+                                    <p className="text-xs text-gray-300 mt-0.5">PNG, JPG, WEBP</p>
+                                </div>
+                            )}
 
-                        <input ref={galleryRef} type="file" accept="image/*" multiple onChange={handleGalleryAdd} className="hidden" />
+                            <input ref={galleryRef} type="file" accept="image/*" multiple onChange={handleGalleryAdd} className="hidden" />
 
-                        {totalGalleryCount > 0 && (
-                            <p className="text-xs text-gray-400 text-center">
-                                {totalGalleryCount} image{totalGalleryCount > 1 ? "s" : ""}
-                                {gallery.length > 0 && ` · ${gallery.length} new`}
-                            </p>
-                        )}
-                    </Section>
+                            {totalGalleryCount > 0 && (
+                                <p className="text-xs text-gray-400 text-center">
+                                    {totalGalleryCount} image{totalGalleryCount > 1 ? "s" : ""}
+                                    {gallery.length > 0 && ` · ${gallery.length} new`}
+                                </p>
+                            )}
+                        </Section>
+                    )}
 
                 </div>
             </div>
